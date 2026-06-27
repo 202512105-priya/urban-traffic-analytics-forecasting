@@ -1,12 +1,9 @@
 import os
 import sys
 import pandas as pd
-import streamlit as st
 
-# Add project root to path if needed
+# Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
-from src.utils.data_generator import generate_sample_data
 
 # Directories
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
@@ -15,81 +12,94 @@ PROCESSED_DATA_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
 FEATURES_DATA_DIR = os.path.join(PROJECT_ROOT, "data", "features")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 
-@st.cache_data(show_spinner="Loading raw traffic telemetry data...")
 def get_raw_data() -> pd.DataFrame:
     """
-    Loads raw traffic data. If not present, triggers the data generator.
+    TODO: Load raw traffic telemetry data.
+    
+    Requirements:
+    1. Read the raw telemetry dataset from RAW_DATA_DIR/traffic_raw.csv.
+    2. If the file does not exist, raise FileNotFoundError or call generate_sample_data() to create it.
+    3. Return the dataset as a pandas DataFrame.
+    
+    Returns:
+        pd.DataFrame: Raw dataset.
     """
-    raw_path = os.path.join(RAW_DATA_DIR, "traffic_raw.csv")
-    if not os.path.exists(raw_path):
-        # Generate the data automatically
-        df = generate_sample_data(output_dir=RAW_DATA_DIR)
-    else:
-        # Load raw file (keeping temperature raw so validator can report corruption)
-        df = pd.read_csv(raw_path)
-    return df
+    raise NotImplementedError(
+        "get_raw_data() is not implemented yet. "
+        "Please write the loading logic in src/utils/db.py."
+    )
 
-@st.cache_data(show_spinner="Running data cleaning and imputation pipelines...")
 def get_clean_data() -> pd.DataFrame:
     """
-    Cleans raw data by executing the cleaner pipeline.
-    """
-    from src.cleaning.cleaner import TrafficCleaner
+    TODO: Impute missing values, drop duplicates, and type-coerce the raw dataset.
     
-    clean_path = os.path.join(PROCESSED_DATA_DIR, "traffic_clean.csv")
-    if os.path.exists(clean_path):
-        df_clean = pd.read_csv(clean_path, parse_dates=["timestamp"])
-    else:
-        df_raw = get_raw_data()
-        cleaner = TrafficCleaner()
-        df_clean = cleaner.fit_transform(df_raw)
-        
-        # Save processed data
-        os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
-        df_clean.to_csv(clean_path, index=False)
-        
-    return df_clean
+    Requirements:
+    1. Check if the processed CSV exists in PROCESSED_DATA_DIR/traffic_clean.csv.
+    2. If it does, load and return it.
+    3. If it does not, load raw data using get_raw_data(), instantiate TrafficCleaner,
+       fit and transform the data, save the result to PROCESSED_DATA_DIR, and return it.
+       
+    Returns:
+        pd.DataFrame: Cleaned dataset.
+    """
+    raise NotImplementedError(
+        "get_clean_data() is not implemented yet. "
+        "Please write the pipeline trigger in src/utils/db.py."
+    )
 
-@st.cache_data(show_spinner="Executing temporal and cyclical feature engineering...")
 def get_featured_data() -> pd.DataFrame:
     """
-    Performs feature engineering on cleaned data.
-    """
-    from src.feature_engineering.features import FeatureExtractor
+    TODO: Run the feature engineering pipeline.
     
-    features_path = os.path.join(FEATURES_DATA_DIR, "traffic_features.csv")
-    if os.path.exists(features_path):
-        df_featured = pd.read_csv(features_path, parse_dates=["timestamp"])
-    else:
-        df_clean = get_clean_data()
-        extractor = FeatureExtractor()
-        df_featured = extractor.fit_transform(df_clean)
-        
-        # Save feature-engineered data
-        os.makedirs(FEATURES_DATA_DIR, exist_ok=True)
-        df_featured.to_csv(features_path, index=False)
-        
-    return df_featured
+    Requirements:
+    1. Check if FEATURES_DATA_DIR/traffic_features.csv exists. If so, return it.
+    2. If not, load clean data using get_clean_data(), instantiate FeatureExtractor,
+       fit and transform the dataset, save the output to FEATURES_DATA_DIR, and return it.
+       
+    Returns:
+        pd.DataFrame: Feature engineered dataset.
+    """
+    raise NotImplementedError(
+        "get_featured_data() is not implemented yet. "
+        "Please write the pipeline trigger in src/utils/db.py."
+    )
 
-def save_model_artifact(model, filename: str):
+def save_model_artifact(model, filename: str) -> str:
     """
-    Utility to save serialized ML models.
+    TODO: Save a serialized ML model.
+    
+    Requirements:
+    1. Create MODEL_DIR if it doesn't exist.
+    2. Serialize and save the model object using joblib or pickle to MODEL_DIR/filename.
+    
+    Args:
+        model: Trained model object.
+        filename (str): Name of the file (e.g. model.joblib).
+        
+    Returns:
+        str: Absolute path to the saved artifact.
     """
-    import joblib
-    os.makedirs(MODEL_DIR, exist_ok=True)
-    model_path = os.path.join(MODEL_DIR, filename)
-    joblib.dump(model, model_path)
-    return model_path
+    raise NotImplementedError(
+        "save_model_artifact() is not implemented yet. "
+        "Please implement in src/utils/db.py."
+    )
 
 def load_model_artifact(filename: str):
     """
-    Utility to load serialized ML models. Returns None if model is not trained yet.
+    TODO: Load a serialized ML model.
+    
+    Requirements:
+    1. Check if MODEL_DIR/filename exists.
+    2. If it exists, load the model weights using joblib or pickle and return it.
+    3. If not, return None.
+    
+    Args:
+        filename (str): Name of the file.
+        
+    Returns:
+        Trained model or None.
     """
-    import joblib
-    model_path = os.path.join(MODEL_DIR, filename)
-    if os.path.exists(model_path):
-        try:
-            return joblib.load(model_path)
-        except Exception:
-            return None
-    return None
+    raise NotImplementedError(
+        "load_model_artifact() is not implemented yet. "
+        "Please implement in src/utils/db.py."
+    )

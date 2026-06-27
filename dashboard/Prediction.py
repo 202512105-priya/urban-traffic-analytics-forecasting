@@ -18,7 +18,14 @@ render_header("Traffic Congestion Prediction", "Interactive machine learning inf
 
 # Initialize Predictor
 predictor = TrafficPredictor()
-predictor.load_model()
+model_loaded = False
+load_error = None
+
+try:
+    predictor.load_model()
+    model_loaded = True
+except NotImplementedError as e:
+    load_error = str(e)
 
 # Create layout columns: Form on left, Prediction Results on right
 col_form, col_res = st.columns([5, 7])
@@ -50,14 +57,11 @@ with col_form:
         month = month_mapping[month_name]
         
         # Weather & Environment Inputs
-        weather_condition = st.selectbox("Weather Condition", ["Clear", "Rainy", "Snowy", "Foggy"], index=0,
-                                         help="Precipitation lowers average speed and capacity limits.")
-        
+        weather_condition = st.selectbox("Weather Condition", ["Clear", "Rainy", "Snowy", "Foggy"], index=0)
         temperature = st.slider("Temperature (°C)", min_value=-15.0, max_value=40.0, value=18.0)
         
         # Holiday Indicator
-        is_holiday = st.checkbox("Is Public Holiday?", value=False,
-                                 help="Holidays shift commuter rush hour patterns to retail/leisure profiles.")
+        is_holiday = st.checkbox("Is Public Holiday?", value=False)
         
         # Submit Button
         submit_btn = st.form_submit_button("🔮 Predict Congestion Profile")
@@ -73,122 +77,136 @@ inputs = {
     "weather_condition": str(weather_condition)
 }
 
-# Run prediction
-results = predictor.predict(inputs)
+# Run prediction if model is loaded and user submits
+results = None
+predict_error = None
+
+if submit_btn or model_loaded:
+    try:
+        results = predictor.predict(inputs)
+    except NotImplementedError as e:
+        predict_error = str(e)
 
 with col_res:
     st.markdown("### 📊 Inference Predictions")
     
-    # 1. Congestion Badge
-    congest_lvl = results["congestion_level"]
-    congest_col = results["congestion_color"]
-    
-    if congest_col == "green":
-        badge_style = "background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3);"
-        status_text = "LOW DENSITY - FREE FLOW"
-    elif congest_col == "warning":
-        badge_style = "background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);"
-        status_text = "MODERATE DENSITY - SLOW DISSIPATION"
-    else:
-        badge_style = "background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);"
-        status_text = "CRITICAL DENSITY - HEAVY GRIDLOCK"
-        
-    st.markdown(
-        f"""
-        <div style="padding: 16px; border-radius: 12px; margin-bottom: 20px; {badge_style}">
-            <div style="font-size: 0.85rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8;">Predicted Congestion Level</div>
-            <div style="font-family: Outfit; font-size: 2.2rem; font-weight: 800; margin: 4px 0;">{congest_lvl}</div>
-            <div style="font-size: 0.85rem; font-weight: 600;">{status_text}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    
-    # 2. Predicted Volume & Confidence
-    col_v, col_c = st.columns(2)
-    with col_v:
-        st.metric(
-            label="Predicted Traffic Volume", 
-            value=f"{results['predicted_volume']} vehicles/hr",
-            help="Point estimation of hourly vehicle flow."
-        )
-    with col_c:
-        st.metric(
-            label="Prediction Confidence", 
-            value=f"{results['confidence_score']}%",
-            help="Confidence calculated using standard error of the random forest trees."
+    if predict_error or load_error:
+        # Render clean warning banner instead of results
+        st.warning(
+            f"⚠️ **Inference Engine Offline**  \n"
+            f"The predictor module raised the following instruction:  \n"
+            f"`{predict_error or load_error}`"
         )
         
-    # 3. Confidence Interval Slider
-    st.write("**95% Confidence Interval Band**")
-    # Custom visualization using HTML/CSS
-    lower = results["lower_bound"]
-    upper = results["upper_bound"]
-    pred = results["predicted_volume"]
-    
-    # Calculate percentage positions
-    max_range = max(100, upper * 1.2)
-    lower_pct = min(90, (lower / max_range) * 100)
-    pred_pct = min(95, (pred / max_range) * 100)
-    upper_pct = min(100, (upper / max_range) * 100)
-    
-    st.markdown(
-        f"""
-        <div style="position: relative; width: 100%; height: 35px; background: rgba(255,255,255,0.05); border-radius: 18px; margin: 15px 0 35px 0; border: 1px solid rgba(255,255,255,0.05);">
-            <!-- Interval Bar -->
-            <div style="position: absolute; left: {lower_pct}%; width: {upper_pct - lower_pct}%; height: 100%; background: rgba(99, 102, 241, 0.25); border-radius: 4px; border-left: 2px solid #6366f1; border-right: 2px solid #6366f1;"></div>
-            <!-- Point Estimate Dot -->
-            <div style="position: absolute; left: {pred_pct}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #ec4899; border-radius: 50%; box-shadow: 0 0 8px #ec4899;"></div>
-            <!-- Labels -->
-            <div style="position: absolute; left: {lower_pct}%; top: 38px; transform: translateX(-50%); font-size: 0.75rem; color: #94a3b8; font-weight: 500;">{lower} (min)</div>
-            <div style="position: absolute; left: {pred_pct}%; top: -20px; transform: translateX(-50%); font-size: 0.8rem; color: #ec4899; font-weight: 700;">{pred} (est)</div>
-            <div style="position: absolute; left: {upper_pct}%; top: 38px; transform: translateX(-50%); font-size: 0.75rem; color: #94a3b8; font-weight: 500;">{upper} (max)</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    
-    # 4. Feature Importance Explanation
-    st.markdown("### 🧬 Explainable AI: Feature Importances")
-    importances = results["feature_importance"]
-    
-    # Convert to DataFrame for plotting
-    df_imp = pd.DataFrame(list(importances.items()), columns=["Feature", "Importance"])
-    # Format labels for readability
-    feature_labels = {
-        "junction_id": "Junction ID",
-        "hour": "Hour of Day",
-        "day_of_week": "Day of Week",
-        "month": "Month of Year",
-        "temperature": "Temperature",
-        "is_holiday": "Holiday Status",
-        "hour_sin": "Hour Cycle (Sin)",
-        "hour_cos": "Hour Cycle (Cos)",
-        "day_sin": "Day Cycle (Sin)",
-        "day_cos": "Day Cycle (Cos)",
-        "month_sin": "Month Cycle (Sin)",
-        "month_cos": "Month Cycle (Cos)",
-        "weather_encoded": "Weather Condition"
-    }
-    df_imp["Feature"] = df_imp["Feature"].map(feature_labels)
-    # Take top 8
-    df_imp = df_imp.head(8).sort_values(by="Importance", ascending=True)
-    
-    fig_imp = px.bar(
-        df_imp, x="Importance", y="Feature",
-        orientation="h",
-        color="Importance",
-        color_continuous_scale="Purples",
-        labels={"Importance": "Weight / Importance", "Feature": "Feature Name"}
-    )
-    fig_imp.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=20, r=20, t=10, b=10),
-        height=220,
-        coloraxis_showscale=False
-    )
-    st.plotly_chart(fig_imp, use_container_width=True)
+        # Display structural placeholders for UI consistency without fake metrics
+        st.markdown(
+            """
+            <div style="padding: 16px; border-radius: 12px; margin-bottom: 20px; background-color: rgba(255,255,255,0.03); color: #94a3b8; border: 1px dashed rgba(255,255,255,0.1);">
+                <div style="font-size: 0.85rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8;">Predicted Congestion Level</div>
+                <div style="font-family: Outfit; font-size: 2.2rem; font-weight: 800; margin: 4px 0; color: #64748b;">TBD</div>
+                <div style="font-size: 0.85rem; font-weight: 600;">No prediction model active in registry.</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        col_v, col_c = st.columns(2)
+        with col_v:
+            st.metric(label="Predicted Traffic Volume", value="TBD")
+        with col_c:
+            st.metric(label="Prediction Confidence", value="TBD")
+            
+        st.write("**95% Confidence Interval Band**")
+        st.markdown(
+            """
+            <div style="position: relative; width: 100%; height: 35px; background: rgba(255,255,255,0.02); border-radius: 18px; margin: 15px 0 35px 0; border: 1px dashed rgba(255,255,255,0.08); text-align: center; line-height: 33px; font-size: 0.75rem; color: #64748b;">
+                Prediction interval band offline.
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        st.markdown("### 🧬 Explainable AI: Feature Importances")
+        st.info("🧬 **XAI weights display is under development.** Implement get_feature_importances() in src/models/predictor.py.")
+        
+    elif results is not None:
+        # Renders if the user has implemented the predictor code
+        congest_lvl = results["congestion_level"]
+        congest_col = results["congestion_color"]
+        
+        if congest_col == "green":
+            badge_style = "background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3);"
+            status_text = "LOW DENSITY - FREE FLOW"
+        elif congest_col == "warning":
+            badge_style = "background-color: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3);"
+            status_text = "MODERATE DENSITY - SLOW DISSIPATION"
+        else:
+            badge_style = "background-color: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3);"
+            status_text = "CRITICAL DENSITY - HEAVY GRIDLOCK"
+            
+        st.markdown(
+            f"""
+            <div style="padding: 16px; border-radius: 12px; margin-bottom: 20px; {badge_style}">
+                <div style="font-size: 0.85rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.8;">Predicted Congestion Level</div>
+                <div style="font-family: Outfit; font-size: 2.2rem; font-weight: 800; margin: 4px 0;">{congest_lvl}</div>
+                <div style="font-size: 0.85rem; font-weight: 600;">{status_text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        col_v, col_c = st.columns(2)
+        with col_v:
+            st.metric(label="Predicted Traffic Volume", value=f"{results['predicted_volume']} vehicles/hr")
+        with col_c:
+            st.metric(label="Prediction Confidence", value=f"{results['confidence_score']}%")
+            
+        st.write("**95% Confidence Interval Band**")
+        lower = results["lower_bound"]
+        upper = results["upper_bound"]
+        pred = results["predicted_volume"]
+        max_range = max(100, upper * 1.2)
+        lower_pct = min(90, (lower / max_range) * 100)
+        pred_pct = min(95, (pred / max_range) * 100)
+        upper_pct = min(100, (upper / max_range) * 100)
+        
+        st.markdown(
+            f"""
+            <div style="position: relative; width: 100%; height: 35px; background: rgba(255,255,255,0.05); border-radius: 18px; margin: 15px 0 35px 0; border: 1px solid rgba(255,255,255,0.05);">
+                <div style="position: absolute; left: {lower_pct}%; width: {upper_pct - lower_pct}%; height: 100%; background: rgba(99, 102, 241, 0.25); border-radius: 4px; border-left: 2px solid #6366f1; border-right: 2px solid #6366f1;"></div>
+                <div style="position: absolute; left: {pred_pct}%; top: 50%; transform: translate(-50%, -50%); width: 14px; height: 14px; background: #ec4899; border-radius: 50%; box-shadow: 0 0 8px #ec4899;"></div>
+                <div style="position: absolute; left: {lower_pct}%; top: 38px; transform: translateX(-50%); font-size: 0.75rem; color: #94a3b8; font-weight: 500;">{lower} (min)</div>
+                <div style="position: absolute; left: {pred_pct}%; top: -20px; transform: translateX(-50%); font-size: 0.8rem; color: #ec4899; font-weight: 700;">{pred} (est)</div>
+                <div style="position: absolute; left: {upper_pct}%; top: 38px; transform: translateX(-50%); font-size: 0.75rem; color: #94a3b8; font-weight: 500;">{upper} (max)</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        st.markdown("### 🧬 Explainable AI: Feature Importances")
+        try:
+            importances = predictor.get_feature_importances()
+            df_imp = pd.DataFrame(list(importances.items()), columns=["Feature", "Importance"])
+            feature_labels = {
+                "junction_id": "Junction ID", "hour": "Hour of Day", "day_of_week": "Day of Week",
+                "month": "Month of Year", "temperature": "Temperature", "is_holiday": "Holiday Status",
+                "hour_sin": "Hour Cycle (Sin)", "hour_cos": "Hour Cycle (Cos)", "day_sin": "Day Cycle (Sin)",
+                "day_cos": "Day Cycle (Cos)", "month_sin": "Month Cycle (Sin)", "month_cos": "Month Cycle (Cos)",
+                "weather_encoded": "Weather Condition"
+            }
+            df_imp["Feature"] = df_imp["Feature"].map(feature_labels)
+            df_imp = df_imp.head(8).sort_values(by="Importance", ascending=True)
+            
+            fig_imp = px.bar(
+                df_imp, x="Importance", y="Feature", orientation="h",
+                color="Importance", color_continuous_scale="Purples"
+            )
+            fig_imp.update_layout(
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=20, r=20, t=10, b=10), height=220, coloraxis_showscale=False
+            )
+            st.plotly_chart(fig_imp, use_container_width=True)
+        except NotImplementedError:
+            st.info("🧬 **Feature importance weights check is under development.**")
 
 render_footer()

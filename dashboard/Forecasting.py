@@ -18,168 +18,197 @@ apply_premium_style()
 # Header
 render_header("Traffic Volume Forecasting", "Time-series predictive timelines and seasonality decomposition")
 
-# Load data
-df_clean = get_clean_data()
-
-# Sidebar options
-st.sidebar.header("📈 Forecast Settings")
-junction_id = st.sidebar.selectbox("Target Junction Sensor", [1, 2, 3, 4], index=2,
-                                   help="Select the junction to forecast.")
-horizon_days = st.sidebar.slider("Forecast Horizon (Days)", min_value=1, max_value=7, value=7,
-                                 help="How many days into the future to project traffic volumes.")
-
-# Run forecast computation
+# Objects
+df_clean = None
+df_forecast = None
 forecaster = TrafficForecaster()
-forecaster.fit(df_clean, int(junction_id))
+data_load_error = None
+forecast_error = None
 
-# Horizon days to hours conversion
+# Try loading cleaned data
+try:
+    df_clean = get_clean_data()
+except NotImplementedError as e:
+    data_load_error = str(e)
+
+# Sidebar settings (will render for UI consistency)
+st.sidebar.header("📈 Forecast Settings")
+junction_id = st.sidebar.selectbox("Target Junction Sensor", [1, 2, 3, 4], index=2)
+horizon_days = st.sidebar.slider("Forecast Horizon (Days)", min_value=1, max_value=7, value=7)
 horizon_hours = horizon_days * 24
-df_forecast = forecaster.forecast(horizon_hours)
 
-# Render Forecaster status
+# Try running forecast if data loaded
+if df_clean is not None:
+    try:
+        forecaster.fit(df_clean, int(junction_id))
+        df_forecast = forecaster.forecast(horizon_hours)
+    except NotImplementedError as e:
+        forecast_error = str(e)
+
+# Render Global Warnings
+if data_load_error:
+    st.warning(f"⚠️ **Ingestion Database Offline**: `{data_load_error}`")
+elif forecast_error:
+    st.warning(
+        f"⚠️ **Forecaster Pipeline Offline**  \n"
+        f"The forecasting engine raised the following instruction:  \n"
+        f"`{forecast_error}`"
+    )
+    st.info(
+        "💡 **Developer Note:**  \n"
+        "To view active forecasts and seasonal components, implement "
+        "[forecaster.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/forecasting/forecaster.py)."
+    )
+
+# Active forecaster description
+core_type = forecaster.model_type if not forecast_error else "PENDING IMPLEMENTATION"
 st.markdown(
-    f"**Active Forecaster Core**: `{forecaster.model_type}` &nbsp; | &nbsp; **Forecast Period**: `{horizon_days} Days ({horizon_hours} hours)`", 
+    f"**Active Forecaster Core**: `{core_type}` &nbsp; | &nbsp; **Forecast Period**: `{horizon_days} Days ({horizon_hours} hours)`", 
     unsafe_allow_html=True
 )
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Main layout: Plotly chart of forecast
+# Main Forecast timeline container
 st.markdown("### 🔮 Traffic Volume Forecast Timeline")
 
-# Filter history for plotting (take last 7 days of history to compare visually, avoiding overcrowding the chart)
-history_days = 7
-j_history = df_clean[df_clean["junction_id"] == int(junction_id)].sort_values("timestamp")
-last_hist_time = j_history["timestamp"].max()
-cutoff_time = last_hist_time - pd.Timedelta(days=history_days)
-j_history_plot = j_history[j_history["timestamp"] >= cutoff_time]
+# Helper to render time-series plot placeholder
+def render_forecast_plot_placeholder():
+    st.markdown(
+        """
+        <div style="background-color: rgba(30, 41, 59, 0.4); border: 1px dashed rgba(255,255,255,0.15); border-radius: 12px; padding: 70px 20px; text-align: center; margin: 15px 0;">
+            <div style="font-size: 3rem; margin-bottom: 12px;">📈</div>
+            <div style="font-family: Outfit; font-size: 1.35rem; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Forecasting Timeline Graph Offline</div>
+            <div style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 20px; max-width: 600px; margin-left: auto; margin-right: auto;">
+                Once you implement fit() and forecast() inside src/forecasting/forecaster.py, 
+                this container will render an interactive Actuals vs. Forecast timeline with a 95% shaded confidence interval band.
+            </div>
+            <div style="background-color: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); display: inline-block; padding: 6px 12px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; color: #a855f7;">
+                Implement TrafficForecaster in src/forecasting/forecaster.py
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-# Build Plotly Trace
-fig_fc = go.Figure()
+if df_forecast is not None and df_clean is not None:
+    # Render actual forecast plot
+    history_days = 7
+    j_history = df_clean[df_clean["junction_id"] == int(junction_id)].sort_values("timestamp")
+    last_hist_time = j_history["timestamp"].max()
+    cutoff_time = last_hist_time - pd.Timedelta(days=history_days)
+    j_history_plot = j_history[j_history["timestamp"] >= cutoff_time]
+    
+    fig_fc = go.Figure()
+    fig_fc.add_trace(go.Scatter(x=j_history_plot["timestamp"], y=j_history_plot["traffic_volume"], name="Historical Actuals", line=dict(color="#94a3b8", width=2)))
+    fig_fc.add_trace(go.Scatter(x=df_forecast["timestamp"], y=df_forecast["forecasted_volume"], name="Forecasted Volume", line=dict(color="#ec4899", width=3)))
+    fig_fc.add_trace(go.Scatter(
+        x=pd.concat([df_forecast["timestamp"], df_forecast["timestamp"].iloc[::-1]]),
+        y=pd.concat([df_forecast["upper_bound"], df_forecast["lower_bound"].iloc[::-1]]),
+        fill='toself', fillcolor='rgba(236, 72, 153, 0.15)', line=dict(color='rgba(255,255,255,0)'),
+        hoverinfo="skip", showlegend=True, name="95% Confidence Interval"
+    ))
+    fig_fc.update_layout(
+        template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(title="Traffic Volume (vehicles/hour)"), xaxis=dict(title="Date & Time"),
+        hovermode="x unified", margin=dict(l=40, r=40, t=20, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig_fc, use_container_width=True)
+else:
+    render_forecast_plot_placeholder()
 
-# Historical Trace
-fig_fc.add_trace(go.Scatter(
-    x=j_history_plot["timestamp"], y=j_history_plot["traffic_volume"],
-    name="Historical Actuals", line=dict(color="#94a3b8", width=2)
-))
-
-# Forecasted Trace
-fig_fc.add_trace(go.Scatter(
-    x=df_forecast["timestamp"], y=df_forecast["forecasted_volume"],
-    name="Forecasted Volume", line=dict(color="#ec4899", width=3)
-))
-
-# Upper / Lower Bound Shading
-fig_fc.add_trace(go.Scatter(
-    x=pd.concat([df_forecast["timestamp"], df_forecast["timestamp"].iloc[::-1]]),
-    y=pd.concat([df_forecast["upper_bound"], df_forecast["lower_bound"].iloc[::-1]]),
-    fill='toself',
-    fillcolor='rgba(236, 72, 153, 0.15)',
-    line=dict(color='rgba(255,255,255,0)'),
-    hoverinfo="skip",
-    showlegend=True,
-    name="95% Confidence Interval"
-))
-
-fig_fc.update_layout(
-    template="plotly_dark",
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    yaxis=dict(title="Traffic Volume (vehicles/hour)"),
-    xaxis=dict(title="Date & Time"),
-    hovermode="x unified",
-    margin=dict(l=40, r=40, t=20, b=40),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-)
-
-st.plotly_chart(fig_fc, use_container_width=True)
-
-# Forecast Subsections
 st.markdown("<hr>", unsafe_allow_html=True)
 st.markdown("### 🧩 Forecast Seasonal Decomposition")
 
-# Check if model has seasonality profiles (fallback has profiles, prophet has components)
+# Component columns
 col_comp1, col_comp2, col_comp3 = st.columns(3)
 
 with col_comp1:
-    # 1. Overall trend (slope direction)
     st.write("**Overall Traffic Trend**")
-    
-    fig_tr = px.line(
-        df_forecast, x="timestamp", y="trend",
-        labels={"trend": "Detrended Volume", "timestamp": "Timeline"},
-        color_discrete_sequence=["#818cf8"]
-    )
-    fig_tr.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=20, r=20, t=10, b=30),
-        height=180
-    )
-    st.plotly_chart(fig_tr, use_container_width=True)
-    
-with col_comp2:
-    # 2. Daily seasonality (hourly profile)
-    st.write("**Hourly Commuter Seasonality**")
-    
-    if forecaster.prophet_model is not None:
-        # Extract daily seasonality from forecast DataFrame
-        # Prophet does not output a simple dictionary, but we can plot seasonality values across hours
-        df_forecast["_hour"] = df_forecast["timestamp"].dt.hour
-        daily_season = df_forecast.groupby("_hour")["seasonal_daily"].mean().reset_index()
-        fig_dl = px.line(daily_season, x="_hour", y="seasonal_daily", color_discrete_sequence=["#c084fc"])
-    else:
-        # Custom fallback profiles are already hourly dict
-        hours = list(range(24))
-        vals = [forecaster.hourly_profile.get(h, 0.0) for h in hours]
-        fig_dl = px.line(x=hours, y=vals, labels={"x": "Hour", "y": "Deviation"}, color_discrete_sequence=["#c084fc"])
+    trend_plotted = False
+    if df_forecast is not None:
+        try:
+            fig_tr = px.line(df_forecast, x="timestamp", y="trend", color_discrete_sequence=["#818cf8"])
+            fig_tr.update_layout(
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=20, r=20, t=10, b=30), height=180
+            )
+            st.plotly_chart(fig_tr, use_container_width=True)
+            trend_plotted = True
+        except KeyError:
+            pass
+            
+    if not trend_plotted:
+        st.info("📈 **Trend decomposition under development.**")
         
-    fig_dl.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=20, r=20, t=10, b=30),
-        height=180,
-        xaxis=dict(tickmode="linear", tick0=0, dtick=4)
-    )
-    st.plotly_chart(fig_dl, use_container_width=True)
+with col_comp2:
+    st.write("**Hourly Commuter Seasonality**")
+    hourly_plotted = False
+    if df_forecast is not None:
+        try:
+            if forecaster.prophet_model is not None:
+                df_forecast["_hour"] = df_forecast["timestamp"].dt.hour
+                daily_season = df_forecast.groupby("_hour")["seasonal_daily"].mean().reset_index()
+                fig_dl = px.line(daily_season, x="_hour", y="seasonal_daily", color_discrete_sequence=["#c084fc"])
+            else:
+                hours = list(range(24))
+                vals = [forecaster.hourly_profile.get(h, 0.0) for h in hours]
+                fig_dl = px.line(x=hours, y=vals, color_discrete_sequence=["#c084fc"])
+                
+            fig_dl.update_layout(
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=20, r=20, t=10, b=30), height=180, xaxis=dict(tickmode="linear", tick0=0, dtick=4)
+            )
+            st.plotly_chart(fig_dl, use_container_width=True)
+            hourly_plotted = True
+        except (KeyError, AttributeError):
+            pass
+            
+    if not hourly_plotted:
+        st.info("🕒 **Hourly cycles under development.**")
 
 with col_comp3:
-    # 3. Weekly seasonality (day of week profile)
     st.write("**Weekly Day-of-Week Seasonality**")
-    
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    if forecaster.prophet_model is not None:
-        df_forecast["_day"] = df_forecast["timestamp"].dt.weekday
-        weekly_season = df_forecast.groupby("_day")["seasonal_weekly"].mean().reset_index()
-        weekly_season["day_name"] = weekly_season["_day"].map(dict(enumerate(days)))
-        fig_wk = px.line(weekly_season, x="day_name", y="seasonal_weekly", color_discrete_sequence=["#f472b6"])
-    else:
-        vals = [forecaster.weekly_profile.get(d, 0.0) for d in range(7)]
-        fig_wk = px.line(x=days, y=vals, labels={"x": "Day", "y": "Deviation"}, color_discrete_sequence=["#f472b6"])
-        
-    fig_wk.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=20, r=20, t=10, b=30),
-        height=180
+    weekly_plotted = False
+    if df_forecast is not None:
+        try:
+            days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            if forecaster.prophet_model is not None:
+                df_forecast["_day"] = df_forecast["timestamp"].dt.weekday
+                weekly_season = df_forecast.groupby("_day")["seasonal_weekly"].mean().reset_index()
+                weekly_season["day_name"] = weekly_season["_day"].map(dict(enumerate(days)))
+                fig_wk = px.line(weekly_season, x="day_name", y="seasonal_weekly", color_discrete_sequence=["#f472b6"])
+            else:
+                vals = [forecaster.weekly_profile.get(d, 0.0) for d in range(7)]
+                fig_wk = px.line(x=days, y=vals, color_discrete_sequence=["#f472b6"])
+                
+            fig_wk.update_layout(
+                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                margin=dict(l=20, r=20, t=10, b=30), height=180
+            )
+            st.plotly_chart(fig_wk, use_container_width=True)
+            weekly_plotted = True
+        except (KeyError, AttributeError):
+            pass
+            
+    if not weekly_plotted:
+        st.info("🗓️ **Weekly cycles under development.**")
+
+# CSV exports rendering check
+if df_forecast is not None:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("### 💾 Export Generated Forecasts")
+    export_df = df_forecast[["timestamp", "forecasted_volume", "lower_bound", "upper_bound"]].copy()
+    export_df["junction_id"] = int(junction_id)
+    csv_data = export_df.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="📥 Download Forecast CSV",
+        data=csv_data,
+        file_name=f"junction_{junction_id}_traffic_forecast_horizon_{horizon_days}d.csv",
+        mime="text/csv"
     )
-    st.plotly_chart(fig_wk, use_container_width=True)
-
-# Export forecast option
-st.markdown("<br>", unsafe_allow_html=True)
-st.markdown("### 💾 Export Generated Forecasts")
-export_df = df_forecast[["timestamp", "forecasted_volume", "lower_bound", "upper_bound"]].copy()
-export_df["junction_id"] = int(junction_id)
-
-csv_data = export_df.to_csv(index=False).encode('utf-8')
-st.download_button(
-    label="📥 Download Forecast CSV",
-    data=csv_data,
-    file_name=f"junction_{junction_id}_traffic_forecast_horizon_{horizon_days}d.csv",
-    mime="text/csv",
-    help="Export forecasted point estimations and interval bounds for down-stream operations."
-)
+else:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.info("📥 **CSV downloads are disabled.** (Requires forecasting engine fit output)")
 
 render_footer()

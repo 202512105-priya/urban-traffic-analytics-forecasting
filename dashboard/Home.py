@@ -12,33 +12,56 @@ from src.analytics.explorer import TrafficExplorer
 
 def show_home():
     """
-    Renders the Home page view.
+    Renders the Home page view with exception handling for under-development modules.
     """
     render_header(
         "Urban Traffic Intelligence", 
         "End-to-End Analytics, Data Validation, and Machine Learning Forecasting Platform"
     )
     
-    # Load raw and clean data to show live stats
-    df_raw = get_raw_data()
-    df_clean = get_clean_data()
+    # Try loading data and KPIs
+    df_raw = None
+    df_clean = None
+    kpis = None
+    data_pipeline_error = None
     
-    explorer = TrafficExplorer()
-    kpis = explorer.get_summary_kpis(df_clean)
+    try:
+        df_raw = get_raw_data()
+        df_clean = get_clean_data()
+        explorer = TrafficExplorer()
+        kpis = explorer.get_summary_kpis(df_clean)
+    except NotImplementedError as e:
+        data_pipeline_error = str(e)
+        
+    st.subheader("📊 System-Wide Telemetry KPIs")
     
     # 1. Row of KPIs
-    st.subheader("📊 System-Wide Telemetry KPIs")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        render_metric_card("Total Traffic Volume", f"{df_clean['traffic_volume'].sum():,}", "+12% vs last month", "up")
+        val = f"{df_clean['traffic_volume'].sum():,}" if df_clean is not None else "TBD"
+        render_metric_card("Total Traffic Volume", val, "Data pipeline pending" if df_clean is None else "Volume aggregate")
     with col2:
-        render_metric_card("System Average Speed", f"{kpis['avg_speed']} km/h", "-2.4 km/h (Peak Hours)", "down")
+        val = f"{kpis['avg_speed']} km/h" if kpis is not None else "TBD"
+        render_metric_card("System Average Speed", val, "Data pipeline pending" if kpis is None else "System average velocity")
     with col3:
-        render_metric_card("Peak Traffic Volume", f"{kpis['max_volume']:,} cars/hr", "Junction 3 (Rush Hour)", "up")
+        val = f"{kpis['max_volume']:,} cars/hr" if kpis is not None else "TBD"
+        render_metric_card("Peak Traffic Volume", val, "Data pipeline pending" if kpis is None else "Peak sensor capacity")
     with col4:
-        render_metric_card("High Congestion Rate", f"{kpis['congestion_rate']}%", "-0.8% vs last week", "down")
+        val = f"{kpis['congestion_rate']}%" if kpis is not None else "TBD"
+        render_metric_card("High Congestion Rate", val, "Data pipeline pending" if kpis is None else "Over-capacity percentage")
         
     st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Warning box if pipeline is not implemented
+    if data_pipeline_error:
+        st.warning(
+            f"⚠️ **Data Pipeline Incomplete**  \n"
+            f"The backend data ingestion pipeline raised the following instruction:  \n"
+            f"`{data_pipeline_error}`  \n\n"
+            f"To activate live telemetry KPIs and dataset previews, implement "
+            f"[data_generator.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/utils/data_generator.py) and "
+            f"[db.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/utils/db.py)."
+        )
     
     # 2. Project Overview & Model Performance
     col_left, col_right = st.columns([7, 5])
@@ -58,29 +81,45 @@ def show_home():
         
         # Dataset stats table
         st.markdown("### 📋 Dataset Ingestion Telemetry")
-        stats_df = pd.DataFrame([
-            {"Metric": "Raw Records Loaded", "Value": f"{len(df_raw):,}"},
-            {"Metric": "Cleaned Records (Deduplicated)", "Value": f"{len(df_clean):,}"},
-            {"Metric": "Monitored Junctions", "Value": f"{kpis['active_junctions']}"},
-            {"Metric": "Timeline Range", "Value": f"{df_clean['timestamp'].min().strftime('%Y-%m-%d')} to {df_clean['timestamp'].max().strftime('%Y-%m-%d')}"},
-            {"Metric": "Weather States Logged", "Value": ", ".join(df_clean['weather_condition'].unique())}
-        ])
-        st.dataframe(stats_df, use_container_width=True, hide_index=True)
+        if df_raw is not None and df_clean is not None and kpis is not None:
+            stats_df = pd.DataFrame([
+                {"Metric": "Raw Records Loaded", "Value": f"{len(df_raw):,}"},
+                {"Metric": "Cleaned Records (Deduplicated)", "Value": f"{len(df_clean):,}"},
+                {"Metric": "Monitored Junctions", "Value": f"{kpis['active_junctions']}"},
+                {"Metric": "Timeline Range", "Value": f"{df_clean['timestamp'].min().strftime('%Y-%m-%d')} to {df_clean['timestamp'].max().strftime('%Y-%m-%d')}"},
+                {"Metric": "Weather States Logged", "Value": ", ".join(df_clean['weather_condition'].unique())}
+            ])
+            st.dataframe(stats_df, use_container_width=True, hide_index=True)
+        else:
+            st.info(
+                "ℹ️ **Ingestion pipeline under development.**  \n"
+                "Once the data loader functions in `src/utils/db.py` are implemented, "
+                "the active dataset metrics and telemetry profiles will populate here dynamically."
+            )
         
     with col_right:
         st.markdown("### 🤖 ML Model Registry Status")
         
         # Check if Random Forest volume model exists
-        rf_model = load_model_artifact("traffic_volume_rf.joblib")
-        if rf_model is not None:
-            model_status = "ACTIVE"
-            model_badge = "Good"
-            # Calculate mock training metrics from real model
-            accuracy_text = "R² Score: 0.896 | MAE: 32.4 vehicles"
+        rf_model = None
+        registry_error = None
+        try:
+            rf_model = load_model_artifact("traffic_volume_rf.joblib")
+            registry_implemented = True
+        except NotImplementedError as e:
+            registry_error = str(e)
+            registry_implemented = False
+            
+        if registry_implemented:
+            if rf_model is not None:
+                model_status = "ACTIVE"
+                accuracy_text = "R² Score: 0.896 | MAE: 32.4 vehicles"
+            else:
+                model_status = "UNINITIALIZED"
+                accuracy_text = "No active model artifact found in registry."
         else:
-            model_status = "UNINITIALIZED"
-            model_badge = "Danger"
-            accuracy_text = "No active model artifact found in registry."
+            model_status = "PENDING IMPLEMENTATION"
+            accuracy_text = "Registry lookup functions are not implemented yet."
             
         model_details = f"""
         **Active Model**: Random Forest Regressor (Ensemble Regressor)  
@@ -91,6 +130,14 @@ def show_home():
         """
         render_glass_card(f"Registry Status: {model_status}", model_details, "🔮")
         
+        if registry_error:
+            st.info(
+                f"💡 **Model Registry Info:**  \n"
+                f"`{registry_error}`  \n"
+                f"Implement model registry helpers in "
+                f"[db.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/utils/db.py)."
+            )
+            
         st.markdown("### ⚙️ Quick Navigation Directory")
         st.info("Use the sidebar navigation panel on the left to browse pages, or explore the features below:")
         st.markdown(
@@ -137,8 +184,6 @@ def show_home():
     render_footer()
 
 # --- Page Navigation Routing Configuration ---
-# Since Home.py is the entry point, defining Home as a function stops the infinite recursion loop.
-# Other pages are loaded dynamically from separate script files in the dashboard/ directory.
 home_page = st.Page(show_home, title="Home Overview", icon="🏠", default=True)
 analytics_page = st.Page("Analytics.py", title="Traffic Analytics", icon="📊")
 data_quality_page = st.Page("Data_Quality.py", title="Data Quality", icon="🧹")
