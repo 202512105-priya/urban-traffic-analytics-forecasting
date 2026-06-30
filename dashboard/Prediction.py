@@ -8,7 +8,11 @@ import plotly.express as px
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.utils.ui import apply_premium_style, render_header, render_footer, render_glass_card
-from src.models.predictor import TrafficPredictor
+from src.utils.db import load_model_artifact
+
+# Import from the new modular structure
+from src.models.predict import predict_congestion
+from src.models.explain import explain_features
 
 # Apply styling
 apply_premium_style()
@@ -16,13 +20,13 @@ apply_premium_style()
 # Header
 render_header("Traffic Congestion Prediction", "Interactive machine learning inference registry interface")
 
-# Initialize Predictor
-predictor = TrafficPredictor()
+# Initialize registry model
+model = None
 model_loaded = False
 load_error = None
 
 try:
-    predictor.load_model()
+    model = load_model_artifact("traffic_volume_rf.joblib")
     model_loaded = True
 except NotImplementedError as e:
     load_error = str(e)
@@ -81,21 +85,26 @@ inputs = {
 results = None
 predict_error = None
 
+# If model artifact was loaded, run prediction
 if submit_btn or model_loaded:
     try:
-        results = predictor.predict(inputs)
+        # Wrap inputs in a DataFrame as expected by the backend function contracts
+        X_pred = pd.DataFrame([inputs])
+        results = predict_congestion(model, X_pred)
     except NotImplementedError as e:
         predict_error = str(e)
+    except Exception as e:
+        predict_error = f"Model execution failed. Ensure model registry has a valid model artifact."
 
 with col_res:
     st.markdown("### 📊 Inference Predictions")
     
-    if predict_error or load_error:
+    if predict_error or load_error or results is None:
         # Render clean warning banner instead of results
         st.warning(
             f"⚠️ **Inference Engine Offline**  \n"
             f"The predictor module raised the following instruction:  \n"
-            f"`{predict_error or load_error}`"
+            f"`{predict_error or load_error or 'Prediction interface uninitialized.'}`"
         )
         
         # Display structural placeholders for UI consistency without fake metrics
@@ -127,12 +136,12 @@ with col_res:
         )
         
         st.markdown("### 🧬 Explainable AI: Feature Importances")
-        st.info("🧬 **XAI weights display is under development.** Implement get_feature_importances() in src/models/predictor.py.")
+        st.info("🧬 **XAI weights display is under development.** Implement explain_features() in src/models/explain.py.")
         
-    elif results is not None:
+    else:
         # Renders if the user has implemented the predictor code
-        congest_lvl = results["congestion_level"]
-        congest_col = results["congestion_color"]
+        congest_lvl = results.get("congestion_level", "TBD")
+        congest_col = results.get("congestion_color", "warning")
         
         if congest_col == "green":
             badge_style = "background-color: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3);"
@@ -157,14 +166,14 @@ with col_res:
         
         col_v, col_c = st.columns(2)
         with col_v:
-            st.metric(label="Predicted Traffic Volume", value=f"{results['predicted_volume']} vehicles/hr")
+            st.metric(label="Predicted Traffic Volume", value=f"{results.get('predicted_volume', 'TBD')} vehicles/hr")
         with col_c:
-            st.metric(label="Prediction Confidence", value=f"{results['confidence_score']}%")
+            st.metric(label="Prediction Confidence", value=f"{results.get('confidence_score', 'TBD')}%")
             
         st.write("**95% Confidence Interval Band**")
-        lower = results["lower_bound"]
-        upper = results["upper_bound"]
-        pred = results["predicted_volume"]
+        lower = results.get("lower_bound", 0)
+        upper = results.get("upper_bound", 100)
+        pred = results.get("predicted_volume", 50)
         max_range = max(100, upper * 1.2)
         lower_pct = min(90, (lower / max_range) * 100)
         pred_pct = min(95, (pred / max_range) * 100)
@@ -185,17 +194,11 @@ with col_res:
         
         st.markdown("### 🧬 Explainable AI: Feature Importances")
         try:
-            importances = predictor.get_feature_importances()
+            # We map model name to feature explainers
+            feature_names = ["junction_id", "hour", "day_of_week", "month", "temperature", "is_holiday", "weather_condition"]
+            importances = explain_features(model, feature_names)
             df_imp = pd.DataFrame(list(importances.items()), columns=["Feature", "Importance"])
-            feature_labels = {
-                "junction_id": "Junction ID", "hour": "Hour of Day", "day_of_week": "Day of Week",
-                "month": "Month of Year", "temperature": "Temperature", "is_holiday": "Holiday Status",
-                "hour_sin": "Hour Cycle (Sin)", "hour_cos": "Hour Cycle (Cos)", "day_sin": "Day Cycle (Sin)",
-                "day_cos": "Day Cycle (Cos)", "month_sin": "Month Cycle (Sin)", "month_cos": "Month Cycle (Cos)",
-                "weather_encoded": "Weather Condition"
-            }
-            df_imp["Feature"] = df_imp["Feature"].map(feature_labels)
-            df_imp = df_imp.head(8).sort_values(by="Importance", ascending=True)
+            df_imp = df_imp.sort_values(by="Importance", ascending=True)
             
             fig_imp = px.bar(
                 df_imp, x="Importance", y="Feature", orientation="h",

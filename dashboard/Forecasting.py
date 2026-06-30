@@ -10,7 +10,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.utils.ui import apply_premium_style, render_header, render_footer, render_glass_card
 from src.utils.db import get_clean_data
-from src.forecasting.forecaster import TrafficForecaster
+
+# Import from the new modular forecasting engine
+from src.forecasting.train import train_forecaster
+from src.forecasting.predict import predict_future_timeline
 
 # Apply styling
 apply_premium_style()
@@ -21,7 +24,7 @@ render_header("Traffic Volume Forecasting", "Time-series predictive timelines an
 # Objects
 df_clean = None
 df_forecast = None
-forecaster = TrafficForecaster()
+forecaster = None
 data_load_error = None
 forecast_error = None
 
@@ -40,8 +43,14 @@ horizon_hours = horizon_days * 24
 # Try running forecast if data loaded
 if df_clean is not None:
     try:
-        forecaster.fit(df_clean, int(junction_id))
-        df_forecast = forecaster.forecast(horizon_hours)
+        # Filter training data for selected junction
+        junc_df = df_clean[df_clean["junction_id"] == int(junction_id)].copy()
+        
+        # Fit the forecaster using new function
+        forecaster = train_forecaster(junc_df)
+        
+        # Query predictions using new function
+        df_forecast = predict_future_timeline(forecaster, horizon_hours)
     except NotImplementedError as e:
         forecast_error = str(e)
 
@@ -50,18 +59,19 @@ if data_load_error:
     st.warning(f"⚠️ **Ingestion Database Offline**: `{data_load_error}`")
 elif forecast_error:
     st.warning(
-        f"⚠️ **Forecaster Pipeline Offline**  \n"
+        f"⚠️ **Forecasting Engine Offline**  \n"
         f"The forecasting engine raised the following instruction:  \n"
         f"`{forecast_error}`"
     )
     st.info(
         "💡 **Developer Note:**  \n"
-        "To view active forecasts and seasonal components, implement "
-        "[forecaster.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/forecasting/forecaster.py)."
+        "To view active forecasts and seasonal components, implement:  \n"
+        "1. `train_forecaster` in `src/forecasting/train.py`  \n"
+        "2. `predict_future_timeline` in `src/forecasting/predict.py`"
     )
 
 # Active forecaster description
-core_type = forecaster.model_type if not forecast_error else "PENDING IMPLEMENTATION"
+core_type = "Meta Prophet / Holt-Winters Additive" if not forecast_error and df_forecast is not None else "PENDING IMPLEMENTATION"
 st.markdown(
     f"**Active Forecaster Core**: `{core_type}` &nbsp; | &nbsp; **Forecast Period**: `{horizon_days} Days ({horizon_hours} hours)`", 
     unsafe_allow_html=True
@@ -79,11 +89,11 @@ def render_forecast_plot_placeholder():
             <div style="font-size: 3rem; margin-bottom: 12px;">📈</div>
             <div style="font-family: Outfit; font-size: 1.35rem; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Forecasting Timeline Graph Offline</div>
             <div style="color: #94a3b8; font-size: 0.95rem; margin-bottom: 20px; max-width: 600px; margin-left: auto; margin-right: auto;">
-                Once you implement fit() and forecast() inside src/forecasting/forecaster.py, 
+                Once you implement train_forecaster() and predict_future_timeline() inside src/forecasting/, 
                 this container will render an interactive Actuals vs. Forecast timeline with a 95% shaded confidence interval band.
             </div>
             <div style="background-color: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); display: inline-block; padding: 6px 12px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; color: #a855f7;">
-                Implement TrafficForecaster in src/forecasting/forecaster.py
+                Implement in src/forecasting/train.py and predict.py
             </div>
         </div>
         """,
@@ -146,21 +156,17 @@ with col_comp2:
     hourly_plotted = False
     if df_forecast is not None:
         try:
-            if forecaster.prophet_model is not None:
+            # Check for Prophet or custom components
+            if "seasonal_daily" in df_forecast.columns:
                 df_forecast["_hour"] = df_forecast["timestamp"].dt.hour
                 daily_season = df_forecast.groupby("_hour")["seasonal_daily"].mean().reset_index()
                 fig_dl = px.line(daily_season, x="_hour", y="seasonal_daily", color_discrete_sequence=["#c084fc"])
-            else:
-                hours = list(range(24))
-                vals = [forecaster.hourly_profile.get(h, 0.0) for h in hours]
-                fig_dl = px.line(x=hours, y=vals, color_discrete_sequence=["#c084fc"])
-                
-            fig_dl.update_layout(
-                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=20, r=20, t=10, b=30), height=180, xaxis=dict(tickmode="linear", tick0=0, dtick=4)
-            )
-            st.plotly_chart(fig_dl, use_container_width=True)
-            hourly_plotted = True
+                fig_dl.update_layout(
+                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=20, r=20, t=10, b=30), height=180, xaxis=dict(tickmode="linear", tick0=0, dtick=4)
+                )
+                st.plotly_chart(fig_dl, use_container_width=True)
+                hourly_plotted = True
         except (KeyError, AttributeError):
             pass
             
@@ -172,22 +178,18 @@ with col_comp3:
     weekly_plotted = False
     if df_forecast is not None:
         try:
-            days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-            if forecaster.prophet_model is not None:
+            if "seasonal_weekly" in df_forecast.columns:
+                days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
                 df_forecast["_day"] = df_forecast["timestamp"].dt.weekday
                 weekly_season = df_forecast.groupby("_day")["seasonal_weekly"].mean().reset_index()
                 weekly_season["day_name"] = weekly_season["_day"].map(dict(enumerate(days)))
                 fig_wk = px.line(weekly_season, x="day_name", y="seasonal_weekly", color_discrete_sequence=["#f472b6"])
-            else:
-                vals = [forecaster.weekly_profile.get(d, 0.0) for d in range(7)]
-                fig_wk = px.line(x=days, y=vals, color_discrete_sequence=["#f472b6"])
-                
-            fig_wk.update_layout(
-                template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                margin=dict(l=20, r=20, t=10, b=30), height=180
-            )
-            st.plotly_chart(fig_wk, use_container_width=True)
-            weekly_plotted = True
+                fig_wk.update_layout(
+                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=20, r=20, t=10, b=30), height=180
+                )
+                st.plotly_chart(fig_wk, use_container_width=True)
+                weekly_plotted = True
         except (KeyError, AttributeError):
             pass
             

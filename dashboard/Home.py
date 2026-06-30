@@ -8,7 +8,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.utils.ui import apply_premium_style, render_header, render_footer, render_metric_card, render_navigation_card, render_glass_card
 from src.utils.db import get_raw_data, get_clean_data, load_model_artifact
-from src.analytics.explorer import TrafficExplorer
 
 def show_home():
     """
@@ -28,8 +27,37 @@ def show_home():
     try:
         df_raw = get_raw_data()
         df_clean = get_clean_data()
-        explorer = TrafficExplorer()
-        kpis = explorer.get_summary_kpis(df_clean)
+        
+        # Import new validation summary functions
+        from src.validation.dataset_summary import (
+            get_total_records, 
+            get_total_features, 
+            get_dataset_timespan, 
+            get_memory_usage
+        )
+        
+        total_records = get_total_records(df_clean)
+        total_features = get_total_features(df_clean)
+        timespan = get_dataset_timespan(df_clean)
+        memory = get_memory_usage(df_clean)
+        
+        # Query new analytics components (which will raise NotImplementedError for now)
+        from src.analytics.traffic import get_traffic_peaks
+        from src.analytics.congestion import calculate_custom_congestion_score
+        
+        # Construct summary metrics
+        kpis = {
+            "total_records": total_records,
+            "total_features": total_features,
+            "timespan": timespan,
+            "memory": memory,
+            # The following require analytics engine implementation
+            "avg_speed": "TBD",
+            "max_volume": "TBD",
+            "congestion_rate": "TBD",
+            "active_junctions": df_clean['junction_id'].nunique() if 'junction_id' in df_clean.columns else "TBD"
+        }
+        
     except NotImplementedError as e:
         data_pipeline_error = str(e)
         
@@ -38,16 +66,16 @@ def show_home():
     # 1. Row of KPIs
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        val = f"{df_clean['traffic_volume'].sum():,}" if df_clean is not None else "TBD"
-        render_metric_card("Total Traffic Volume", val, "Data pipeline pending" if df_clean is None else "Volume aggregate")
+        val = f"{kpis['total_records']:,}" if kpis is not None else "TBD"
+        render_metric_card("Total Traffic Volume", val, "Data pipeline pending" if kpis is None else "Total records")
     with col2:
         val = f"{kpis['avg_speed']} km/h" if kpis is not None else "TBD"
         render_metric_card("System Average Speed", val, "Data pipeline pending" if kpis is None else "System average velocity")
     with col3:
-        val = f"{kpis['max_volume']:,} cars/hr" if kpis is not None else "TBD"
+        val = f"{kpis['max_volume']}" if kpis is not None else "TBD"
         render_metric_card("Peak Traffic Volume", val, "Data pipeline pending" if kpis is None else "Peak sensor capacity")
     with col4:
-        val = f"{kpis['congestion_rate']}%" if kpis is not None else "TBD"
+        val = f"{kpis['congestion_rate']}" if kpis is not None else "TBD"
         render_metric_card("High Congestion Rate", val, "Data pipeline pending" if kpis is None else "Over-capacity percentage")
         
     st.markdown("<br>", unsafe_allow_html=True)
@@ -55,12 +83,11 @@ def show_home():
     # Warning box if pipeline is not implemented
     if data_pipeline_error:
         st.warning(
-            f"⚠️ **Data Pipeline Incomplete**  \n"
+            f"⚠️ **Data Ingestion Module Under Development**  \n"
             f"The backend data ingestion pipeline raised the following instruction:  \n"
             f"`{data_pipeline_error}`  \n\n"
-            f"To activate live telemetry KPIs and dataset previews, implement "
-            f"[data_generator.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/utils/data_generator.py) and "
-            f"[db.py](file:///Users/priyashah/Desktop/urban-traffic-analytics-forecasting/src/utils/db.py)."
+            f"To activate live telemetry KPIs and dataset previews, implement the loader and validator files in "
+            f"`src/core/loader.py` and `src/validation/`."
         )
     
     # 2. Project Overview & Model Performance
@@ -84,17 +111,17 @@ def show_home():
         if df_raw is not None and df_clean is not None and kpis is not None:
             stats_df = pd.DataFrame([
                 {"Metric": "Raw Records Loaded", "Value": f"{len(df_raw):,}"},
-                {"Metric": "Cleaned Records (Deduplicated)", "Value": f"{len(df_clean):,}"},
+                {"Metric": "Cleaned Records (Deduplicated)", "Value": f"{kpis['total_records']:,}"},
                 {"Metric": "Monitored Junctions", "Value": f"{kpis['active_junctions']}"},
-                {"Metric": "Timeline Range", "Value": f"{df_clean['timestamp'].min().strftime('%Y-%m-%d')} to {df_clean['timestamp'].max().strftime('%Y-%m-%d')}"},
-                {"Metric": "Weather States Logged", "Value": ", ".join(df_clean['weather_condition'].unique())}
+                {"Metric": "Timeline Range", "Value": f"{kpis['timespan'][0].strftime('%Y-%m-%d')} to {kpis['timespan'][1].strftime('%Y-%m-%d')}" if kpis['timespan'][0] else "TBD"},
+                {"Metric": "Memory Footprint", "Value": f"{kpis['memory']:.2f} MB"}
             ])
             st.dataframe(stats_df, use_container_width=True, hide_index=True)
         else:
             st.info(
                 "ℹ️ **Ingestion pipeline under development.**  \n"
-                "Once the data loader functions in `src/utils/db.py` are implemented, "
-                "the active dataset metrics and telemetry profiles will populate here dynamically."
+                "Once the data loader functions in `src/core/loader.py` and validation summary in "
+                "`src/validation/dataset_summary.py` are implemented, this table will update dynamically."
             )
         
     with col_right:

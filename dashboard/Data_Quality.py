@@ -10,8 +10,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.utils.ui import apply_premium_style, render_header, render_footer, render_metric_card, render_status_badge
 from src.utils.db import get_raw_data, get_clean_data
-from src.validation.validator import TrafficValidator
-from src.cleaning.cleaner import TrafficCleaner
+
+# Import from the new single-responsibility modules
+from src.validation.quality_score import calculate_quality_metrics
+from src.validation.missing_values import missing_summary
+from src.validation.duplicates import count_duplicates, duplicate_percentage
+from src.validation.schema import schema_summary
+from src.validation.outliers import outlier_summary
+from src.cleaning.pipeline import run_cleaning_pipeline
 
 # Apply styling
 apply_premium_style()
@@ -19,8 +25,7 @@ apply_premium_style()
 # Header
 render_header("Data Quality Dashboard", "Telemetry health tracking and schema validation audit logs")
 
-# Objects
-validator = TrafficValidator()
+# Load raw dataset for analysis
 df_raw = None
 raw_report = None
 data_load_error = None
@@ -32,10 +37,38 @@ try:
 except NotImplementedError as e:
     data_load_error = str(e)
 
+# Helper function to construct a quality report from the modular backend functions
+def run_validation_report(dataframe):
+    """
+    Invokes modular validation components and compiles them into a unified report.
+    Dashboard page remains thin - it only collects the outputs of the validation engine.
+    """
+    metrics = calculate_quality_metrics(dataframe)
+    missing_info = missing_summary(dataframe)
+    dup_count = count_duplicates(dataframe)
+    dup_pct = duplicate_percentage(dataframe)
+    schema_info = schema_summary(dataframe)
+    outlier_info = outlier_summary(dataframe)
+    
+    # Calculate type mismatch counts
+    type_discrepancies = schema_info.get("type_discrepancies", {}) if isinstance(schema_info, dict) else {}
+    
+    return {
+        "quality_score": metrics.get("overall_health_score", 0.0) if isinstance(metrics, dict) else 0.0,
+        "missing_values": missing_info,
+        "duplicates": {
+            "duplicate_count": dup_count,
+            "percentage": dup_pct
+        },
+        "schema": schema_info,
+        "outliers": outlier_info,
+        "corrupted_columns_count": len(type_discrepancies)
+    }
+
 # Try running validation reports on raw data if loaded
 if df_raw is not None:
     try:
-        raw_report = validator.get_quality_report(df_raw)
+        raw_report = run_validation_report(df_raw)
     except NotImplementedError as e:
         validator_error = str(e)
 
@@ -51,12 +84,11 @@ if "pipeline_cleaned" not in st.session_state:
 cleaning_error = None
 if st.sidebar.button("⚙️ Run Ingestion Cleaning"):
     if df_raw is None:
-        st.sidebar.error("Error: Raw telemetry stream is unavailable (db.py not implemented).")
+        st.sidebar.error("Error: Raw telemetry stream is unavailable (loader.py not implemented).")
     else:
         try:
-            cleaner = TrafficCleaner()
-            # Try to clean the data to verify implementation
-            df_test = cleaner.fit_transform(df_raw)
+            # Try to run the cleaning pipeline to verify implementation
+            df_test = run_cleaning_pipeline(df_raw)
             st.session_state["pipeline_cleaned"] = True
             st.sidebar.success("ETL Cleaning Pipeline Completed!")
         except NotImplementedError as e:
@@ -85,9 +117,8 @@ badge_html = render_status_badge("UNINITIALIZED", "danger")
 if df_raw is not None:
     if st.session_state["pipeline_cleaned"]:
         try:
-            cleaner = TrafficCleaner()
-            df_active = cleaner.fit_transform(df_raw)
-            report = validator.get_quality_report(df_active)
+            df_active = run_cleaning_pipeline(df_raw)
+            report = run_validation_report(df_active)
             data_label = "CLEANED DATASET"
             badge_html = render_status_badge("PROCESSED - OK", "good")
         except Exception:
@@ -145,7 +176,7 @@ with col_quality_summary:
     col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
     
     with col_kpi1:
-        missing_count = sum([col_info["total_missing"] for col_info in report["missing_values"].values()]) if report is not None else "TBD"
+        missing_count = sum([col_info["total_missing"] for col_info in report["missing_values"].values()]) if (report is not None and isinstance(report.get("missing_values"), dict)) else "TBD"
         render_metric_card("Missing Elements", f"{missing_count}" if isinstance(missing_count, str) else f"{missing_count:,}", "To be imputed", "down")
     with col_kpi2:
         dup_count = report["duplicates"]["duplicate_count"] if report is not None else "TBD"
@@ -165,7 +196,7 @@ tab_missing, tab_duplicates, tab_schema, tab_outliers = st.tabs([
 ])
 
 # Utility placeholder
-def render_audit_placeholder(title: str, function_name: str, explanation: str):
+def render_audit_placeholder(title: str, file_name: str, function_name: str, explanation: str):
     st.markdown(
         f"""
         <div style="background-color: rgba(30, 41, 59, 0.45); border: 1px dashed rgba(255,255,255,0.15); border-radius: 12px; padding: 40px; text-align: center; margin: 15px 0;">
@@ -175,7 +206,7 @@ def render_audit_placeholder(title: str, function_name: str, explanation: str):
                 {explanation}
             </div>
             <div style="background-color: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); display: inline-block; padding: 6px 12px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; color: #a855f7;">
-                Implement {function_name}() in src/validation/validator.py
+                Implement {function_name}() in src/validation/{file_name}
             </div>
         </div>
         """,
@@ -186,16 +217,16 @@ def render_audit_placeholder(title: str, function_name: str, explanation: str):
 with tab_missing:
     st.write("### Missing Values Per Column")
     missing_rendered = False
-    if report is not None:
+    if report is not None and isinstance(report.get("missing_values"), dict):
         try:
             missing_data = []
             for col, info in report["missing_values"].items():
                 missing_data.append({
                     "Column": col,
-                    "Null Count": info["null_count"],
-                    "Sentinel Count": info["sentinel_count"],
-                    "Total Missing": info["total_missing"],
-                    "Percentage (%)": info["percentage"]
+                    "Null Count": info.get("null_count", 0),
+                    "Sentinel Count": info.get("sentinel_count", 0),
+                    "Total Missing": info.get("total_missing", 0),
+                    "Percentage (%)": info.get("percentage", 0.0)
                 })
             df_missing = pd.DataFrame(missing_data)
             
@@ -223,7 +254,8 @@ with tab_missing:
     if not missing_rendered:
         render_audit_placeholder(
             "Missingness Analysis", 
-            "check_missing_values", 
+            "missing_values.py",
+            "missing_summary", 
             "Analyzes raw null counts, empty string sentinels, and percentage of missing indices for all telemetry columns."
         )
 
@@ -231,10 +263,10 @@ with tab_missing:
 with tab_duplicates:
     st.write("### Record Duplication Check")
     dup_rendered = False
-    if report is not None:
+    if report is not None and isinstance(report.get("duplicates"), dict):
         try:
             dup_info = report["duplicates"]
-            if dup_info["duplicate_count"] > 0:
+            if dup_info.get("duplicate_count", 0) > 0:
                 st.warning(f"Audited {dup_info['duplicate_count']} exact duplicate records ({dup_info['percentage']}% of total dataset).")
                 st.write("Sample Duplicate Records:")
                 dups_sample = df_active[df_active.duplicated(keep=False)].head(10)
@@ -248,7 +280,8 @@ with tab_duplicates:
     if not dup_rendered:
         render_audit_placeholder(
             "Duplicate Row Checker", 
-            "check_duplicates", 
+            "duplicates.py",
+            "count_duplicates", 
             "Detects exact row duplicates across timestamps and sensors, highlighting data pipeline ingestion redundancy."
         )
 
@@ -256,14 +289,24 @@ with tab_duplicates:
 with tab_schema:
     st.write("### Target Schema Validation Audit")
     schema_rendered = False
-    if report is not None:
+    if report is not None and isinstance(report.get("schema"), dict):
         try:
             schema_report = report["schema"]
             schema_data = []
-            for col, exp_type in validator.target_schema.items():
+            
+            # Reconstruct expected types list
+            expected_schema = {
+                "timestamp": "datetime", "junction_id": "integer", "traffic_volume": "integer",
+                "average_speed": "float", "weather_condition": "string", "temperature": "float",
+                "is_holiday": "integer", "congestion_index": "float"
+            }
+            
+            type_discrepancies = schema_report.get("type_discrepancies", {})
+            
+            for col, exp_type in expected_schema.items():
                 if col in df_active.columns:
                     actual_type = str(df_active[col].dtype)
-                    has_mismatch = col in schema_report["type_discrepancies"]
+                    has_mismatch = col in type_discrepancies
                     status = "Mismatch ❌" if has_mismatch else "Pass Check  "
                 else:
                     actual_type = "Missing"
@@ -284,7 +327,8 @@ with tab_schema:
     if not schema_rendered:
         render_audit_placeholder(
             "Schema Datatype Audit", 
-            "validate_schema", 
+            "schema.py",
+            "schema_summary", 
             "Compares columns and datatypes against a target schema definition, identifying corruptions."
         )
 
@@ -292,15 +336,15 @@ with tab_schema:
 with tab_outliers:
     st.write("### Outlier Detection (Z-Score > 3.0)")
     outliers_rendered = False
-    if report is not None:
+    if report is not None and isinstance(report.get("outliers"), dict):
         try:
             outliers_data = []
             for col, info in report["outliers"].items():
                 outliers_data.append({
                     "Numeric Column": col,
-                    "Outlier Count": info["outlier_count"],
-                    "Percentage (%)": info["percentage"],
-                    "Statistical Bound (99.7%)": f"{info['bounds'][0]} to {info['bounds'][1]}"
+                    "Outlier Count": info.get("outlier_count", 0),
+                    "Percentage (%)": info.get("percentage", 0.0),
+                    "Statistical Bound (99.7%)": f"{info.get('bounds', (0,0))[0]} to {info.get('bounds', (0,0))[1]}"
                 })
             df_outliers = pd.DataFrame(outliers_data)
             st.dataframe(df_outliers, use_container_width=True, hide_index=True)
@@ -319,7 +363,8 @@ with tab_outliers:
     if not outliers_rendered:
         render_audit_placeholder(
             "Outlier Scanner", 
-            "check_outliers", 
+            "outliers.py",
+            "outlier_summary", 
             "Finds extreme values using Z-score or IQR techniques, determining statistical boundaries for sensor anomalies."
         )
 
