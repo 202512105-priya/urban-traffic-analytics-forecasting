@@ -68,4 +68,49 @@ def monthly_trend_analysis(df: pd.DataFrame) -> pd.DataFrame:
     """
     TODO: Group traffic counts by month.
     """
+    data = df.copy()
+
+    data["date_time"] = pd.to_datetime(data["date_time"])
+
+    data["month_number"] = data["date_time"].dt.month
+
+    data["month"] = data["date_time"].dt.month_name()
+
+    monthly_summary = (
+
+        data.groupby(["month_number", "month"])["traffic_volume"]
+
+        .agg(
+
+            average_traffic="mean",
+
+            max_traffic="max",
+
+            min_traffic="min",
+
+            std_deviation="std",
+
+            observations="count",
+
+        )
+
+        .reset_index()
+
+        .sort_values("month_number")
+
+    )
+
+    monthly_summary["average_traffic"] = (
+
+        monthly_summary["average_traffic"].round(2)
+
+    )
+
+    monthly_summary["std_deviation"] = (
+
+        monthly_summary["std_deviation"].round(2)
+
+    )
+
+    return monthly_summary.drop(columns="month_number")
     raise NotImplementedError("monthly_trend_analysis() is not implemented yet.")
