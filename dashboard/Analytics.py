@@ -31,9 +31,13 @@ df = None
 data_load_error = None
 
 # Try to load clean data
+#try:
+#    df = get_clean_data()
+#except NotImplementedError as e:
+#    data_load_error = str(e)
 try:
-    df = get_clean_data()
-except NotImplementedError as e:
+    df = pd.read_csv("data/raw/Metro_Interstate_Traffic_Volume.csv")
+except Exception as e:
     data_load_error = str(e)
 
 # --- Sidebar Filters (Will always render for UI completeness) ---
@@ -163,23 +167,26 @@ with tab_temporal:
                 hourly_df = peak_hour_analysis(filtered_df)
                 
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=hourly_df["hour"], y=hourly_df["avg_volume"],
-                    name="Traffic Volume (LHS)", line=dict(color="#6366f1", width=3)
-                ))
-                fig.add_trace(go.Scatter(
-                    x=hourly_df["hour"], y=hourly_df["avg_speed"],
-                    name="Average Speed (RHS)", line=dict(color="#ec4899", width=3, dash="dash"),
-                    yaxis="y2"
-                ))
-                fig.update_layout(
-                    yaxis=dict(title="Traffic Volume (vehicles/hour)", titlefont=dict(color="#6366f1")),
-                    yaxis2=dict(title="Average Speed (km/h)", titlefont=dict(color="#ec4899"), overlaying="y", side="right"),
-                    xaxis=dict(title="Hour of Day", tickmode="linear", tick0=0, dtick=2),
-                    template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    margin=dict(l=40, r=40, t=20, b=40), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                fig = px.bar(
+                    hourly_df,
+                    x="hour",
+                    y="average_traffic",
+                    labels={
+                        "hour": "Hour of Day",
+                        "average_traffic": "Average Traffic Volume"
+                    },
+                    title="Average Traffic Volume by Hour"
                 )
+
+                fig.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)"
+                )
+
                 st.plotly_chart(fig, use_container_width=True)
+
+                st.dataframe(hourly_df, use_container_width=True)
                 hourly_peaks_plotted = True
             except NotImplementedError:
                 pass
